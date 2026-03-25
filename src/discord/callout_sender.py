@@ -46,6 +46,12 @@ class CalloutSender:
             override_channel=channel
         )
 
+    async def send_quote_overview(self, channel, item: dict):
+        await self._send_quote(
+            item["quote"], item.get("signals"), item.get("chart_bytes"),
+            override_channel=channel
+        )
+
     async def send_flow_single(self, channel, item: dict):
         await self._send_flow(item["callout"], item.get("chart_bytes"),
                               override_channel=channel)
@@ -272,6 +278,133 @@ class CalloutSender:
 
         log.info(f"Sent {callout.symbol} {type_str} ${callout.strike} → {len(channels_to_send)} channel(s).")
 
+    # ── Quote / Overview embed ────────────────────────────────────────────
+    async def _send_quote(
+        self,
+        quote: dict,
+        signals,
+        chart_bytes: Optional[bytes],
+        override_channel=None,
+    ):
+        symbol = quote.get("symbol", "N/A")
+        price = float(quote.get("last") or quote.get("close") or 0)
+        
+        embed = discord.Embed(
+            title=f"📊 {symbol}  —  ${price:.2f}",
+            description="**Technical Analysis Overview**",
+            color=discord.Color.light_grey(),
+            timestamp=datetime.utcnow(),
+        )
+
+        if signals:
+            rsi_e  = "🔥" if signals.rsi > 65 else ("❄️" if signals.rsi < 35 else "➡️")
+            macd_e = "📈" if signals.macd_hist > 0 else "📉"
+            cmf_e  = "🟢" if signals.cmf > 0.05 else ("🔴" if signals.cmf < -0.05 else "⚪")
+            embed.add_field(
+                name="📊 Momentum",
+                value=(
+                    f"**RSI:** {signals.rsi:.1f} {rsi_e}\n"
+                    f"**Stoch %K/%D:** {signals.stoch_k:.0f} / {signals.stoch_d:.0f}\n"
+                    f"**Williams %R:** {signals.williams_r:.0f}\n"
+                    f"**MACD Hist:** {signals.macd_hist:+.4f} {macd_e}\n"
+                    f"**CMF:** {signals.cmf:+.3f} {cmf_e}"
+                ),
+                inline=True,
+            )
+
+            adx_e = "💪" if signals.adx > 30 else ("📶" if signals.adx > 20 else "💤")
+            vwap_pos = "above" if signals.ema9 > signals.vwap else "below"
+            embed.add_field(
+                name="📈 Trend Strength",
+                value=(
+                    f"**ADX:** {signals.adx:.1f} {adx_e}  [{signals.trend_strength}]\n"
+                    f"**+DI / -DI:** {signals.plus_di:.1f} / {signals.minus_di:.1f}\n"
+                    f"**VWAP:** ${signals.vwap:.2f} (price {vwap_pos})"
+                ),
+                inline=True,
+            )
+
+            embed.add_field(
+                name="📉 Moving Averages",
+                value=(
+                    f"**EMA 9:**   ${signals.ema9:.2f}\n"
+                    f"**EMA 21:**  ${signals.ema21:.2f}\n"
+                    f"**EMA 50:**  ${signals.ema50:.2f}\n"
+                    f"**EMA 200:** ${signals.ema200:.2f}"
+                ),
+                inline=True,
+            )
+
+            embed.add_field(
+                name="🎯 Key Levels",
+                value=(
+                    f"**Support:**    ${signals.support:.2f}\n"
+                    f"**Resistance:** ${signals.resistance:.2f}\n"
+                    f"**BB Upper:**   ${signals.bb_upper:.2f}\n"
+                    f"**BB Lower:**   ${signals.bb_lower:.2f}\n"
+                    f"**ATR:** ${signals.atr:.2f} ({signals.atr_pct:.1f}%)"
+                ),
+                inline=True,
+            )
+
+            embed.add_field(
+                name="🔵 Pivot Points",
+                value=(
+                    f"**Pivot:** ${signals.pivot:.2f}\n"
+                    f"**R1/R2:** ${signals.r1:.2f} / ${signals.r2:.2f}\n"
+                    f"**S1/S2:** ${signals.s1:.2f} / ${signals.s2:.2f}\n"
+                    f"**Cam R3/S3:** ${signals.cam_r3:.2f} / ${signals.cam_s3:.2f}"
+                ),
+                inline=True,
+            )
+
+            if signals.gex != 0 or signals.call_wall != 0:
+                gex_fmt = f"${signals.gex/1e9:.2f}B" if abs(signals.gex) >= 1e9 else \
+                          f"${signals.gex/1e6:.1f}M" if abs(signals.gex) >= 1e6 else \
+                          f"${signals.gex:,.0f}"
+                gex_e   = "📌" if signals.gex_bias == "LONG" else ("💥" if signals.gex_bias == "SHORT" else "⚪")
+                embed.add_field(
+                    name=f"⚡ Gamma Exposure (GEX)  {gex_e}",
+                    value=(
+                        f"**Net GEX:** {gex_fmt}  [{signals.gex_bias}]\n"
+                        f"**GEX Flip:** ${signals.gex_flip:.2f}\n"
+                        f"**Call Wall:** ${signals.call_wall:.2f}\n"
+                        f"**Put Wall:**  ${signals.put_wall:.2f}\n"
+                        f"**Max Pain:**  ${signals.max_pain:.2f}"
+                    ),
+                    inline=True,
+                )
+
+            if signals.dark_pool_levels:
+                dp_lvls = "  |  ".join([f"${l:.2f}" for l in signals.dark_pool_levels[:4]])
+                dp_e    = "🟢" if signals.dark_pool_bias == "BULLISH" else \
+                          ("🔴" if signals.dark_pool_bias == "BEARISH" else "⚪")
+                embed.add_field(
+                    name=f"🌑 Dark Pool Levels  {dp_e}  [{signals.dark_pool_bias}]",
+                    value=(
+                        f"**Levels:** {dp_lvls}\n"
+                        f"*(High-volume institutional price clusters)*"
+                    ),
+                    inline=False,
+                )
+
+        embed.set_footer(
+            text=f"Wall Street Scanner  •  {datetime.utcnow().strftime('%H:%M:%S')} UTC"
+        )
+
+        if chart_bytes:
+            embed.set_image(url=f"attachment://{symbol}_chart.png")
+
+        channels_to_send = self._get_channels(None, override_channel)
+        for ch in channels_to_send:
+            if chart_bytes:
+                f = discord.File(io.BytesIO(chart_bytes), filename=f"{symbol}_chart.png")
+                await ch.send(embed=embed, file=f)
+            else:
+                await ch.send(embed=embed)
+
+        log.info(f"Sent quote overview for {symbol} → {len(channels_to_send)} channel(s).")
+
     # ── Flow embed ────────────────────────────────────────────────────────
     async def _send_flow(
         self,
@@ -284,10 +417,19 @@ class CalloutSender:
         premium   = callout.volume * callout.mid * 100
         flow_e    = "🐋" if premium >= 500_000 else "🦈"
 
+        # Color by conviction tier
+        conv = getattr(callout, "conviction", "")
+        if conv == "HIGH":
+            embed_color = discord.Color.green()
+        elif conv == "MEDIUM":
+            embed_color = discord.Color.gold()
+        else:
+            embed_color = discord.Color.light_grey()
+
         embed = discord.Embed(
             title=f"{flow_e} UNUSUAL FLOW  —  {callout.symbol}  {type_str}  ${callout.strike:.0f}",
             description=f"**Trigger:** {callout.trigger}",
-            color=discord.Color.blue(),
+            color=embed_color,
             timestamp=datetime.utcnow(),
         )
 
@@ -324,15 +466,82 @@ class CalloutSender:
             inline=True,
         )
 
+        # ── 🧠 Trade Intelligence ─────────────────────────────────────────
+        _CLS_LABELS = {
+            "SAME_DAY_EXPIRY":   "⏱️ Same-day expiry",
+            "WEEKLY_SHORT_TERM": "📅 Weekly",
+            "CHEAP_LOTTERY":     "🎰 Lottery ticket",
+            "DEEP_ITM":          "📦 Deep ITM",
+            "NEW_POSITION":      "🆕 New position",
+            "BLOCK_TRADE":       "🐋 Block trade",
+            "SWEEP":             "🌊 Sweep",
+            "STANDARD":          "📋 Standard",
+        }
+        _INT_LABELS = {
+            "DIRECTIONAL_BET":     "🎯 Directional bet",
+            "HEDGE":               "🛡️ Hedge",
+            "POSITION_ADJUSTMENT": "🔧 Position adjustment",
+            "SPREAD_LEG":          "📐 Spread / multi-leg",
+            "MARKET_MAKER":        "🏦 Market maker",
+        }
+
+        cls_label = _CLS_LABELS.get(callout.trade_classification, callout.trade_classification)
+        int_label = _INT_LABELS.get(callout.trade_intent, callout.trade_intent)
+
+        if callout.trade_classification or callout.trade_intent:
+            intel_lines = []
+            if callout.trade_classification:
+                intel_lines.append(f"**Type:** {cls_label}")
+            if callout.trade_intent:
+                intel_lines.append(f"**Intent:** {int_label}")
+            # Show flags if any
+            if callout.intelligence_flags:
+                for flag in callout.intelligence_flags[:2]:
+                    intel_lines.append(f"⚠️ {flag}")
+            embed.add_field(
+                name="🧠 Trade Intelligence",
+                value="\n".join(intel_lines),
+                inline=True,
+            )
+
         embed.add_field(
             name="🔢 Greeks",
             value=(
-                f"Δ Delta: `{callout.delta:+.3f}`\n"
+                f"Δ Delta: `{callout.delta:+.003f}`\n"
                 f"Θ Theta: `{callout.theta:+.4f}`\n"
                 f"ν Vega:  `{callout.vega:.4f}`"
             ),
             inline=True,
         )
+
+        # ── Conviction bar ────────────────────────────────────────────────
+        conv_score = getattr(callout, "conviction_score", 0.0)
+        if conv_score > 0:
+            filled  = int(conv_score * 10)
+            bar     = "█" * filled + "░" * (10 - filled)
+            conv_pct = int(conv_score * 100)
+            conv_emoji = "🟢" if conv == "HIGH" else ("🟡" if conv == "MEDIUM" else "🔴")
+            embed.add_field(
+                name=f"{conv_emoji} Conviction: {conv}  [{bar}]  {conv_pct}%",
+                value=f"Strategy: **{callout.strategy}**",
+                inline=False,
+            )
+
+        # ── Explanation narrative ─────────────────────────────────────────
+        if callout.explanation:
+            embed.add_field(
+                name="📝 Analysis",
+                value=callout.explanation[:1024],
+                inline=False,
+            )
+
+        # ── Flow pattern from tracker ─────────────────────────────────────
+        if callout.flow_pattern:
+            embed.add_field(
+                name="🔁 Flow Pattern",
+                value=callout.flow_pattern[:512],
+                inline=False,
+            )
 
         # GEX context on flow alerts
         if callout.gex != 0 or callout.call_wall != 0:
@@ -372,9 +581,6 @@ class CalloutSender:
                 inline=True,
             )
 
-        if callout.notes:
-            embed.add_field(name="📝 Notes", value=callout.notes, inline=False)
-
         embed.set_footer(
             text=f"Flow Scanner  •  {datetime.utcnow().strftime('%H:%M:%S')} UTC  |  ⚠️ Not financial advice"
         )
@@ -383,7 +589,7 @@ class CalloutSender:
         for ch in channels_to_send:
             await ch.send(embed=embed)
 
-        log.info(f"Flow alert: {callout.symbol} {type_str} ${callout.strike} | ${premium:,.0f}")
+        log.info(f"Flow alert: {callout.symbol} {type_str} ${callout.strike} | ${premium:,.0f} | {conv}")
 
     # ── Channel routing ───────────────────────────────────────────────────
     def _get_channels(self, callout: OptionCallout, override) -> list:

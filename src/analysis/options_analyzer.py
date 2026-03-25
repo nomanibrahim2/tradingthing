@@ -11,6 +11,7 @@ from datetime import datetime, date
 from typing import List, Optional, Tuple
 
 from .technicals import TechnicalSignals
+from .flow_classifier import classify_flow, FlowIntelligence
 
 log = logging.getLogger("OptionsAnalyzer")
 
@@ -91,6 +92,15 @@ class OptionCallout:
     cam_s3: float = 0.0
 
     notes: str = ""
+
+    # ── Flow Intelligence (set by classifier) ──────────────────────────────
+    trade_classification: str = ""      # BLOCK_TRADE, SWEEP, CHEAP_LOTTERY, etc.
+    trade_intent:         str = ""      # DIRECTIONAL_BET, HEDGE, SPREAD_LEG, etc.
+    conviction:           str = ""      # HIGH / MEDIUM / LOW
+    conviction_score:     float = 0.0   # 0.0–1.0
+    explanation:          str = ""      # human-readable narrative
+    flow_pattern:         str = ""      # from FlowTracker
+    intelligence_flags:   List[str] = field(default_factory=list)
 
 
 class OptionsAnalyzer:
@@ -309,7 +319,17 @@ class OptionsAnalyzer:
             sl    = round(entry * 0.50, 2)
             rr    = round((tp - entry) / max(entry - sl, 0.01), 2)
 
-            confidence = 0.65 if (is_large_premium and is_unusual_vol) else 0.58
+            # ── Flow Intelligence ─────────────────────────────────────────
+            hv20 = signals.hist_vol_20 if signals else 0.0
+            intel = classify_flow(
+                opt, underlying_price,
+                signals=signals,
+                all_options=options,
+                hv20=hv20,
+            )
+
+            # Use classifier's conviction score instead of flat value
+            confidence = intel.conviction_score
             tier, color = self._confidence_tier(confidence)
 
             trigger_parts = []
@@ -364,6 +384,13 @@ class OptionsAnalyzer:
                 trend_strength=signals.trend_strength if signals else "WEAK",
                 obv_trend=obv_trend,
                 notes=f"Dollar premium: ${premium:,.0f}",
+                # Flow Intelligence
+                trade_classification=intel.classification,
+                trade_intent=intel.intent,
+                conviction=intel.conviction,
+                conviction_score=intel.conviction_score,
+                explanation=intel.explanation,
+                intelligence_flags=intel.flags,
             )
             alerts.append(callout)
 

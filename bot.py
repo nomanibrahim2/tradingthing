@@ -108,7 +108,10 @@ async def quick_quote(ctx, ticker: str):
     await ctx.send(f"📊 Pulling data for **{ticker}**...")
     result = await scanner.analyze_single(ticker)
     if result:
-        await sender.send_single(ctx.channel, result)
+        if result.get("callout"):
+            await sender.send_single(ctx.channel, result)
+        else:
+            await sender.send_quote_overview(ctx.channel, result)
     else:
         await ctx.send(f"Could not analyze **{ticker}** — check the ticker or try later.")
 

@@ -103,3 +103,9 @@ class Settings:
     # Timing
     SCAN_INTERVAL_MINUTES: int  = 10
     FLOW_INTERVAL_MINUTES: int  = 5
+
+    # ── Flow Intelligence ─────────────────────────────────────────────────────
+    FLOW_TRACKER_WINDOW_MINUTES: int = 120    # rolling window for pattern detection
+    BLOCK_TRADE_MIN_CONTRACTS: int   = 1000   # min volume to classify as block trade
+    LOTTERY_MAX_MID_PRICE: float     = 0.30   # max mid price for "lottery ticket"
+
