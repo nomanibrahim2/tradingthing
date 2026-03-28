@@ -109,6 +109,8 @@ class CalloutSender:
                 f"**R:R Ratio:** {callout.reward_risk:.1f}:1\n"
                 f"**Prob Profit:** {callout.prob_of_profit*100:.0f}%\n"
                 f"**IV:** {callout.iv:.1f}%  [{callout.iv_vs_hv}]"
+                + (" `[corrected]`" if callout.iv_corrected else "")
+                + ("\n⚠️ **Premium inflated vs theoretical**" if callout.premium_inflated else "")
             ),
             inline=True,
         )
@@ -415,175 +417,182 @@ class CalloutSender:
         is_call   = callout.option_type.lower() == "call"
         type_str  = "CALL" if is_call else "PUT"
         premium   = callout.volume * callout.mid * 100
-        flow_e    = "🐋" if premium >= 500_000 else "🦈"
-
-        # Color by conviction tier
+        
+        conv_score = getattr(callout, "conviction_score", 0.0)
         conv = getattr(callout, "conviction", "")
+        
         if conv == "HIGH":
-            embed_color = discord.Color.green()
-        elif conv == "MEDIUM":
             embed_color = discord.Color.gold()
+            title_prefix = "🔥 HIGH CONVICTION BTO"
+        elif conv == "MEDIUM":
+            embed_color = discord.Color.orange()
+            title_prefix = "🌊 UNUSUAL BTO"
         else:
             embed_color = discord.Color.light_grey()
-
+            title_prefix = "🔎 FLOW"
+            
         embed = discord.Embed(
-            title=f"{flow_e} UNUSUAL FLOW  —  {callout.symbol}  {type_str}  ${callout.strike:.0f}",
-            description=f"**Trigger:** {callout.trigger}",
+            title=f"{title_prefix} {type_str} — {callout.symbol} {callout.strike:.0f}{type_str[0]} {callout.expiration}",
             color=embed_color,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.utcnow()
         )
 
+        # Row 1
         embed.add_field(
-            name="📋 Contract",
-            value=(
-                f"**Type:** {type_str}\n"
-                f"**Strike:** ${callout.strike:.2f}\n"
-                f"**Expiry:** {callout.expiration} ({callout.dte}d)\n"
-                f"**Underlying:** ${callout.underlying_price:.2f}"
-            ),
-            inline=True,
+            name="📈 Ticker",
+            value=f"**{callout.symbol}**",
+            inline=True
         )
-
         embed.add_field(
-            name="💸 Flow Size",
-            value=(
-                f"**Premium:** ${premium:,.0f}\n"
-                f"**Volume:** {callout.volume:,}\n"
-                f"**OI:** {callout.open_interest:,}\n"
-                f"**Vol/OI:** {callout.volume / max(callout.open_interest, 1):.1f}x"
-            ),
-            inline=True,
+            name="🎯 Contract",
+            value=f"{type_str} ${callout.strike:.0f}",
+            inline=True
         )
-
         embed.add_field(
-            name="💰 Pricing",
-            value=(
-                f"**Mid:** ${callout.mid:.2f}\n"
-                f"**Bid/Ask:** ${callout.bid:.2f} / ${callout.ask:.2f}\n"
-                f"**Spread:** {callout.bid_ask_spread_pct:.1f}%\n"
-                f"**IV:** {callout.iv:.1f}%"
-            ),
-            inline=True,
+            name="📆 Expiry",
+            value=f"{callout.expiration} ({callout.dte}DTE)",
+            inline=True
         )
-
-        # ── 🧠 Trade Intelligence ─────────────────────────────────────────
-        _CLS_LABELS = {
-            "SAME_DAY_EXPIRY":   "⏱️ Same-day expiry",
-            "WEEKLY_SHORT_TERM": "📅 Weekly",
-            "CHEAP_LOTTERY":     "🎰 Lottery ticket",
-            "DEEP_ITM":          "📦 Deep ITM",
-            "NEW_POSITION":      "🆕 New position",
-            "BLOCK_TRADE":       "🐋 Block trade",
-            "SWEEP":             "🌊 Sweep",
-            "STANDARD":          "📋 Standard",
-        }
-        _INT_LABELS = {
-            "DIRECTIONAL_BET":     "🎯 Directional bet",
-            "HEDGE":               "🛡️ Hedge",
-            "POSITION_ADJUSTMENT": "🔧 Position adjustment",
-            "SPREAD_LEG":          "📐 Spread / multi-leg",
-            "MARKET_MAKER":        "🏦 Market maker",
-        }
-
-        cls_label = _CLS_LABELS.get(callout.trade_classification, callout.trade_classification)
-        int_label = _INT_LABELS.get(callout.trade_intent, callout.trade_intent)
-
-        if callout.trade_classification or callout.trade_intent:
-            intel_lines = []
-            if callout.trade_classification:
-                intel_lines.append(f"**Type:** {cls_label}")
-            if callout.trade_intent:
-                intel_lines.append(f"**Intent:** {int_label}")
-            # Show flags if any
-            if callout.intelligence_flags:
-                for flag in callout.intelligence_flags[:2]:
-                    intel_lines.append(f"⚠️ {flag}")
-            embed.add_field(
-                name="🧠 Trade Intelligence",
-                value="\n".join(intel_lines),
-                inline=True,
-            )
-
+        
+        # Row 2
+        prem_fmt = f"${premium/1e6:.2f}M" if premium >= 1e6 else f"${premium/1e3:.0f}K"
         embed.add_field(
-            name="🔢 Greeks",
-            value=(
-                f"Δ Delta: `{callout.delta:+.003f}`\n"
-                f"Θ Theta: `{callout.theta:+.4f}`\n"
-                f"ν Vega:  `{callout.vega:.4f}`"
-            ),
-            inline=True,
+            name="💰 Premium",
+            value=f"**{prem_fmt}**",
+            inline=True
+        )
+        embed.add_field(
+            name="💵 Price",
+            value=f"${callout.mid:.2f}",
+            inline=True
+        )
+        embed.add_field(
+            name="📦 Size",
+            value=f"{callout.volume:,} contracts",
+            inline=True
+        )
+        
+        # Row 3
+        vol_oi = callout.volume / max(callout.open_interest, 1)
+        
+        # OTM / ITM Calculation
+        if is_call:
+            money_diff = callout.strike - callout.underlying_price
+        else:
+            money_diff = callout.underlying_price - callout.strike
+            
+        pct_diff = abs(money_diff) / callout.underlying_price * 100
+        if money_diff > 0:
+            money_str = f"{pct_diff:.1f}% OTM"
+        elif money_diff < 0:
+            money_str = f"{pct_diff:.1f}% ITM"
+        else:
+            money_str = "ATM"
+            
+        embed.add_field(
+            name="📊 OI",
+            value=f"{callout.open_interest:,}",
+            inline=True
+        )
+        embed.add_field(
+            name="📐 Vol/OI",
+            value=f"{vol_oi:.1f}x",
+            inline=True
+        )
+        embed.add_field(
+            name="📏 Moneyness",
+            value=money_str,
+            inline=True
+        )
+        
+        # Row 4
+        side_guess = "Ask 🔴 (aggressive buy)" if int(callout.volume) >= 500 else "Mid ⚪"
+        sentiment = "Bullish" if is_call else "Bearish"
+        embed.add_field(
+            name="⚡ Side",
+            value=side_guess,
+            inline=True
+        )
+        embed.add_field(
+            name="🔷 Type",
+            value="Sweep" if getattr(callout, "trade_classification", "") == "SWEEP" else "Single",
+            inline=True
+        )
+        embed.add_field(
+            name="🎭 Sentiment",
+            value=sentiment,
+            inline=True
         )
 
-        # ── Conviction bar ────────────────────────────────────────────────
-        conv_score = getattr(callout, "conviction_score", 0.0)
-        if conv_score > 0:
-            filled  = int(conv_score * 10)
-            bar     = "█" * filled + "░" * (10 - filled)
-            conv_pct = int(conv_score * 100)
-            conv_emoji = "🟢" if conv == "HIGH" else ("🟡" if conv == "MEDIUM" else "🔴")
+        # DTE / Gamma Risk Warning
+        if callout.dte <= 3:
+            if pct_diff <= 2.0:
+                risk_lvl = "Extreme Gamma/Pin Risk (Near-the-Money)"
+            else:
+                risk_lvl = "High Gamma Risk"
             embed.add_field(
-                name=f"{conv_emoji} Conviction: {conv}  [{bar}]  {conv_pct}%",
-                value=f"Strategy: **{callout.strategy}**",
-                inline=False,
+                name="⚠️ Sub-3DTE Warning",
+                value=f"This contract expires in **{callout.dte} days**. *{risk_lvl}* — options this close to expiration are highly volatile and can go to zero quickly.",
+                inline=False
             )
 
-        # ── Explanation narrative ─────────────────────────────────────────
-        if callout.explanation:
-            embed.add_field(
-                name="📝 Analysis",
-                value=callout.explanation[:1024],
-                inline=False,
-            )
-
-        # ── Flow pattern from tracker ─────────────────────────────────────
-        if callout.flow_pattern:
-            embed.add_field(
-                name="🔁 Flow Pattern",
-                value=callout.flow_pattern[:512],
-                inline=False,
-            )
-
-        # GEX context on flow alerts
-        if callout.gex != 0 or callout.call_wall != 0:
-            gex_fmt = f"${callout.gex/1e6:.1f}M" if abs(callout.gex) >= 1e6 else f"${callout.gex:,.0f}"
-            gex_e   = "📌" if callout.gex_bias == "LONG" else ("💥" if callout.gex_bias == "SHORT" else "⚪")
-            embed.add_field(
-                name=f"⚡ GEX Context  {gex_e}",
-                value=(
-                    f"**Net GEX:** {gex_fmt}  [{callout.gex_bias}]\n"
-                    f"**Call Wall:** ${callout.call_wall:.2f}\n"
-                    f"**Put Wall:**  ${callout.put_wall:.2f}\n"
-                    f"**Max Pain:**  ${callout.max_pain:.2f}"
-                ),
-                inline=True,
-            )
-
-        # Dark pool context on flow alerts
-        if callout.dark_pool_levels:
-            dp_lvls = "  |  ".join([f"${l:.2f}" for l in callout.dark_pool_levels[:3]])
-            dp_e    = "🟢" if callout.dark_pool_bias == "BULLISH" else \
-                      ("🔴" if callout.dark_pool_bias == "BEARISH" else "⚪")
-            embed.add_field(
-                name=f"🌑 Dark Pool  {dp_e}  [{callout.dark_pool_bias}]",
-                value=f"**Levels:** {dp_lvls}",
-                inline=True,
-            )
-
-        # Trend context
-        if callout.adx > 0:
-            adx_e = "💪" if callout.adx > 30 else "📶"
-            embed.add_field(
-                name="📈 Trend",
-                value=(
-                    f"**ADX:** {callout.adx:.1f} {adx_e}  [{callout.trend_strength}]\n"
-                    f"**OBV:** {callout.obv_trend}"
-                ),
-                inline=True,
-            )
-
-        embed.set_footer(
-            text=f"Flow Scanner  •  {datetime.utcnow().strftime('%H:%M:%S')} UTC  |  ⚠️ Not financial advice"
+        # BTO Confidence Bar
+        bar_len = 15
+        filled = int(conv_score * bar_len)
+        bar = "█" * filled + "░" * (bar_len - filled)
+        embed.add_field(
+            name="🎯 BTO Confidence",
+            value=f"```text\n{bar} ▒ {conv.capitalize()} ({int(conv_score*100)}%)\n```",
+            inline=False
         )
+        
+        # Qualifiers
+        quals = []
+        if vol_oi > 2: quals.append(f"volume {vol_oi:.1f}x OI (new position opening)")
+        if abs(callout.delta) > 0.6: quals.append("in-the-money (high directional conviction)")
+        if premium > 500_000: quals.append("massive premium (1/2M+)")
+        if callout.trade_classification == "SWEEP": quals.append("aggressive sweep (urgency)")
+        if callout.intelligence_flags:
+            quals.extend([f.replace('⚠️ ', '') for f in callout.intelligence_flags])
+        
+        embed.add_field(
+            name="✅ BTO Qualifiers",
+            value=" • ".join(quals) if quals else "Standard institutional flow",
+            inline=False
+        )
+        
+        # Conviction 
+        filled_10 = int(conv_score * 10)
+        bar_10 = "█" * filled_10 + "░" * (10 - filled_10)
+        embed.add_field(
+            name="🏆 Conviction",
+            value=f"```text\n{bar_10} ▒ {filled_10}/10\n```",
+            inline=False
+        )
+
+        # Filters
+        embed.add_field(
+            name="🔍 Filter Details",
+            value="premium ≥ threshold | volume > open interest | directional intent | momentum alignment",
+            inline=False
+        )
+        
+        if getattr(callout, "flow_pattern", None):
+            embed.add_field(
+                name="🔄 Repeat Activity",
+                value=callout.flow_pattern,
+                inline=False
+            )
+            
+        embed.add_field(
+            name="🔗 Charts",
+            value=f"[TradingView](https://www.tradingview.com/chart/?symbol={callout.symbol})",
+            inline=False
+        )
+        
+        # Footer
+        tier_str = f"Tier 1 🔥 High Conviction" if conv_score >= 0.7 else "Tier 2 🔔 Standard Flow"
+        embed.set_footer(text=f"{tier_str} • Flow Scanner")
 
         channels_to_send = self._get_flow_channels(callout, override_channel)
         for ch in channels_to_send:

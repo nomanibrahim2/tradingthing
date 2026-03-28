@@ -60,6 +60,15 @@ def _classify_trade(opt: dict, underlying_price: float) -> Tuple[str, List[str]]
         flags.append("Same-day expiry — short-term activity, not high conviction")
         return "SAME_DAY_EXPIRY", flags
 
+    # ── Post-dump inflated premium ────────────────────────────────────────
+    # If IV is extreme (>200%) AND the contract has high premium, this is
+    # likely aftermath of a big move, not a new opportunity
+    iv = float(greeks.get("mid_iv") or greeks.get("smv_vol") or 0)
+    premium = vol * mid * 100
+    if iv > 2.0 and premium > 50_000:
+        flags.append(f"⚠️ IV at {iv*100:.0f}% — premium inflated, underlying likely already moved")
+        return "POST_DUMP_INFLATED", flags
+
     # ── Cheap lottery tickets ─────────────────────────────────────────────
     if mid < 0.30 and vol > 5000:
         flags.append("Cheap contracts + huge volume — likely fast trading, not strong positioning")
@@ -185,6 +194,11 @@ def _score_conviction(
     delta     = abs(float(greeks.get("delta") or 0))
     premium   = vol * mid * 100
 
+    # ── Post-dump / inflated premium penalty ──────────────────────────────
+    if classification == "POST_DUMP_INFLATED":
+        score -= 0.25
+        reasons.append("Premium inflated post-move — underlying already dumped")
+
     # ── Time structure ────────────────────────────────────────────────────
     if dte == 0:
         score -= 0.25
@@ -305,15 +319,16 @@ def _score_conviction(
 # ── Narrative Builder ─────────────────────────────────────────────────────────
 
 _CLASSIFICATION_LABELS = {
-    "SAME_DAY_EXPIRY":  "⏱️ Same-day expiry",
-    "WEEKLY_SHORT_TERM": "📅 Weekly",
-    "CHEAP_LOTTERY":    "🎰 Lottery ticket",
-    "DEEP_ITM":         "📦 Deep ITM (stock substitute)",
-    "NEW_POSITION":     "🆕 New position (OI=0)",
-    "BLOCK_TRADE":      "🐋 Block trade",
-    "SWEEP":            "🌊 Aggressive sweep",
-    "STANDARD":         "📋 Standard flow",
-    "UNKNOWN":          "❓ Unclassified",
+    "SAME_DAY_EXPIRY":    "⏱️ Same-day expiry",
+    "WEEKLY_SHORT_TERM":  "📅 Weekly",
+    "CHEAP_LOTTERY":      "🎰 Lottery ticket",
+    "DEEP_ITM":           "📦 Deep ITM (stock substitute)",
+    "NEW_POSITION":       "🆕 New position (OI=0)",
+    "BLOCK_TRADE":        "🐋 Block trade",
+    "SWEEP":              "🌊 Aggressive sweep",
+    "POST_DUMP_INFLATED": "📛 Post-move inflated premium",
+    "STANDARD":           "📋 Standard flow",
+    "UNKNOWN":            "❓ Unclassified",
 }
 
 _INTENT_LABELS = {

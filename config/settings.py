@@ -104,6 +104,12 @@ class Settings:
     SCAN_INTERVAL_MINUTES: int  = 10
     FLOW_INTERVAL_MINUTES: int  = 5
 
+    # ── IV / Premium Sanity ──────────────────────────────────────────────────
+    MAX_IV: float                    = 5.0    # max IV as decimal (500%) — clamp above this
+    IV_RECOMPUTE_THRESHOLD: float    = 0.50   # if BS price diverges >50% from mid, recompute IV
+    DUMP_PCT_THRESHOLD: float        = 0.05   # underlying drop >5% = "already dumped"
+    MAX_PREMIUM_MULTIPLE: float      = 2.5    # if market mid > 2.5x theoretical, flag inflated
+
     # ── Flow Intelligence ─────────────────────────────────────────────────────
     FLOW_TRACKER_WINDOW_MINUTES: int = 120    # rolling window for pattern detection
     BLOCK_TRADE_MIN_CONTRACTS: int   = 1000   # min volume to classify as block trade

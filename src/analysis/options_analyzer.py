@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 
 from .technicals import TechnicalSignals
 from .flow_classifier import classify_flow, FlowIntelligence
+from .greeks import compute_bs_price
 
 log = logging.getLogger("OptionsAnalyzer")
 
@@ -92,6 +93,8 @@ class OptionCallout:
     cam_s3: float = 0.0
 
     notes: str = ""
+    iv_corrected: bool  = False   # True if IV was re-derived from market price
+    premium_inflated: bool = False  # True if premium >> BS theoretical price
 
     # ── Flow Intelligence (set by classifier) ──────────────────────────────
     trade_classification: str = ""      # BLOCK_TRADE, SWEEP, CHEAP_LOTTERY, etc.
@@ -174,6 +177,15 @@ class OptionsAnalyzer:
         vega   = float(greeks.get("vega") or 0)
         oi     = int(opt.get("open_interest") or 0)
         vol    = int(opt.get("volume") or 0)
+        iv_corrected = bool(opt.get("iv_corrected", False))
+
+        # ── Premium sanity check ──────────────────────────────────────────
+        premium_inflated = False
+        if iv > 0 and mid > 0 and dte > 0:
+            bs_theo = compute_bs_price(underlying_price, strike, iv, dte,
+                                       self.s.RISK_FREE_RATE, option_type)
+            if bs_theo > 0 and mid > bs_theo * self.s.MAX_PREMIUM_MULTIPLE:
+                premium_inflated = True
 
         # ── TP / SL ────────────────────────────────────────────────────────
         atr   = signals.atr
@@ -205,7 +217,9 @@ class OptionsAnalyzer:
 
         # ── Confidence ─────────────────────────────────────────────────────
         confidence       = self._score_confidence(signals, reward_risk, pop,
-                                                  spread_pct, iv_vs_hv, oi, vol)
+                                                  spread_pct, iv_vs_hv, oi, vol,
+                                                  premium_inflated=premium_inflated,
+                                                  iv_corrected=iv_corrected)
         tier, color      = self._confidence_tier(confidence)
 
         if tier == "LOW":
@@ -271,6 +285,9 @@ class OptionsAnalyzer:
             s1=signals.s1,
             cam_r3=signals.cam_r3,
             cam_s3=signals.cam_s3,
+            # IV/premium quality
+            iv_corrected=iv_corrected,
+            premium_inflated=premium_inflated,
         )
         return [callout]
 
@@ -309,6 +326,15 @@ class OptionsAnalyzer:
             exp      = str(opt.get("expiration_date") or "")
             dte      = self._dte(exp)
             opt_type = str(opt.get("option_type") or "").lower()
+            iv_corrected = bool(opt.get("iv_corrected", False))
+
+            # ── Premium inflation check ───────────────────────────────────
+            premium_inflated = False
+            if iv > 0 and mid > 0 and dte > 0:
+                bs_theo = compute_bs_price(underlying_price, strike, iv, dte,
+                                           self.s.RISK_FREE_RATE, opt_type)
+                if bs_theo > 0 and mid > bs_theo * self.s.MAX_PREMIUM_MULTIPLE:
+                    premium_inflated = True
 
             spread     = ask - bid
             spread_pct = spread / mid
@@ -391,6 +417,9 @@ class OptionsAnalyzer:
                 conviction_score=intel.conviction_score,
                 explanation=intel.explanation,
                 intelligence_flags=intel.flags,
+                # IV/premium quality
+                iv_corrected=iv_corrected,
+                premium_inflated=premium_inflated,
             )
             alerts.append(callout)
 
@@ -406,7 +435,9 @@ class OptionsAnalyzer:
 
     def _score_confidence(self, signals: TechnicalSignals, reward_risk: float,
                           pop: float, spread_pct: float, iv_vs_hv: str,
-                          oi: int, vol: int) -> float:
+                          oi: int, vol: int,
+                          premium_inflated: bool = False,
+                          iv_corrected: bool = False) -> float:
         score = 0.0
 
         # Core bias strength
@@ -461,6 +492,12 @@ class OptionsAnalyzer:
         if oi  > 5000:  score += 0.04
         if vol > 1000:  score += 0.04
         score -= spread_pct * 0.08
+
+        # ── Premium / IV quality penalties ─────────────────────────────────
+        if premium_inflated:
+            score -= 0.15  # premium far exceeds theoretical — likely already moved
+        if iv_corrected:
+            score -= 0.03  # IV was re-derived — slight data quality concern
 
         return round(min(1.0, max(0.0, score)), 3)
 
