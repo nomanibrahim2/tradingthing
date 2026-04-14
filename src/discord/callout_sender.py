@@ -14,6 +14,7 @@ import discord
 
 from src.analysis.options_analyzer import OptionCallout
 from config.settings import Settings
+from config.server_manager import server_manager
 
 log = logging.getLogger("CalloutSender")
 
@@ -605,24 +606,28 @@ class CalloutSender:
         if override:
             return [override]
         channels = []
-        main_ch = self.bot.get_channel(self.s.CHANNEL_CALLOUTS)
-        if main_ch:
-            channels.append(main_ch)
-        if callout.confidence_tier == "HIGH":
-            high_ch = self.bot.get_channel(self.s.CHANNEL_HIGH_CONF)
-            if high_ch:
-                channels.append(high_ch)
+        for ch_id in server_manager.get_all_channels_for_type("callouts"):
+            ch = self.bot.get_channel(ch_id)
+            if ch: channels.append(ch)
+            
+        if callout and getattr(callout, "confidence_tier", None) == "HIGH":
+            for ch_id in server_manager.get_all_channels_for_type("high_conf"):
+                ch = self.bot.get_channel(ch_id)
+                if ch and ch not in channels: channels.append(ch)
+                
         return channels
 
     def _get_flow_channels(self, callout: OptionCallout, override) -> list:
         if override:
             return [override]
         channels = []
-        flow_ch = self.bot.get_channel(self.s.CHANNEL_FLOW)
-        if flow_ch:
-            channels.append(flow_ch)
-        if callout.confidence_tier == "HIGH":
-            main_ch = self.bot.get_channel(self.s.CHANNEL_CALLOUTS)
-            if main_ch:
-                channels.append(main_ch)
+        for ch_id in server_manager.get_all_channels_for_type("flow"):
+            ch = self.bot.get_channel(ch_id)
+            if ch: channels.append(ch)
+            
+        if callout and getattr(callout, "confidence_tier", None) == "HIGH":
+            for ch_id in server_manager.get_all_channels_for_type("callouts"):
+                ch = self.bot.get_channel(ch_id)
+                if ch and ch not in channels: channels.append(ch)
+                
         return channels

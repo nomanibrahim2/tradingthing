@@ -299,6 +299,7 @@ class OptionsAnalyzer:
         options: List[dict],
         avg_daily_volume: float,
         signals: TechnicalSignals = None,
+        is_manual: bool = False,
     ) -> List[OptionCallout]:
         alerts = []
         for opt in options:
@@ -353,6 +354,49 @@ class OptionsAnalyzer:
                 all_options=options,
                 hv20=hv20,
             )
+
+            # --- Max Confluence Execution Protocol ---
+            if getattr(self.s, "MAX_CONFLUENCE_ONLY", False) and not is_manual:
+                if not signals:
+                    continue
+                
+                direction = "BULLISH" if opt_type == "call" else "BEARISH"
+                
+                # 1. Institutional Flow
+                flow_ok = is_unusual_vol and (signals.dark_pool_bias == direction)
+                
+                # 2. Trend & Volume
+                if opt_type == "call":
+                    emas_ok = (underlying_price > signals.ema9 > signals.ema21 > 
+                               signals.ema50 > signals.ema200 and underlying_price > signals.vwap)
+                    cmf_ok = signals.cmf > 0.05
+                else:
+                    emas_ok = (underlying_price < signals.ema9 < signals.ema21 < 
+                               signals.ema50 < signals.ema200 and underlying_price < signals.vwap)
+                    cmf_ok = signals.cmf < -0.05
+                trend_vol_ok = emas_ok and cmf_ok
+                
+                # 3. Trend Strength
+                adx_ok = signals.adx > 25
+                di_ok = (signals.plus_di > signals.minus_di) if opt_type == "call" else (signals.minus_di > signals.plus_di)
+                trend_str_ok = adx_ok and di_ok
+                
+                # 4. Momentum
+                macd_accel = (signals.macd_hist > signals.prev_macd_hist if opt_type == "call" 
+                              else signals.macd_hist < signals.prev_macd_hist)
+                              
+                if opt_type == "call":
+                    stoch_pivot = getattr(signals, 'prev_stoch_k', 50.0) < 20 and signals.stoch_k > 20
+                    will_pivot = getattr(signals, 'prev_williams_r', -50.0) < -80 and signals.williams_r > -80
+                else:
+                    stoch_pivot = getattr(signals, 'prev_stoch_k', 50.0) > 80 and signals.stoch_k < 80
+                    will_pivot = getattr(signals, 'prev_williams_r', -50.0) > -20 and signals.williams_r < -20
+                mom_ok = macd_accel and stoch_pivot and will_pivot
+                
+                if not (flow_ok and trend_vol_ok and trend_str_ok and mom_ok):
+                    continue  # Fails matrix
+                    
+                intel.flags.append("PENDING_INSIDER_CHECK")
 
             # Use classifier's conviction score instead of flat value
             confidence = intel.conviction_score

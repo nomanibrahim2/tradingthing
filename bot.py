@@ -14,9 +14,13 @@ import discord
 from discord.ext import commands, tasks
 
 from src.scanner.market_scanner import MarketScanner
+from src.analysis.options_analyzer import OptionsAnalyzer
 from src.discord.callout_sender import CalloutSender
+from src.discord.watchlist_ui import WatchlistView
+from config.settings import DEFAULT_WATCHLIST, save_watchlist
 from src.data.market_hours import is_market_open, next_market_open
 from config.settings import Settings
+from config.server_manager import server_manager
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -50,11 +54,13 @@ async def scan_loop():
     log.info("🔍 Starting market scan...")
     try:
         callouts = await scanner.run_full_scan()
-        if callouts:
-            await sender.dispatch(callouts)
-            log.info(f"✅ Dispatched {len(callouts)} callout(s).")
+        high_conf = [c for c in callouts if c["callout"].confidence >= 0.80]
+        
+        if high_conf:
+            await sender.dispatch(high_conf)
+            log.info(f"✅ Dispatched {len(high_conf)} callout(s) (confidence >= 80%).")
         else:
-            log.info("No qualifying callouts this scan.")
+            log.info("No qualifying high-confidence callouts this scan.")
     except Exception as e:
         log.error(f"Scan error: {e}", exc_info=True)
 
@@ -66,8 +72,13 @@ async def flow_scan_loop():
         return
     try:
         flow_alerts = await scanner.scan_unusual_flow()
-        if flow_alerts:
-            await sender.dispatch_flow(flow_alerts)
+        high_conf_flow = [
+            f for f in flow_alerts 
+            if getattr(f["callout"], "confidence", getattr(f["callout"], "conviction_score", 0.0)) >= 0.80
+        ]
+        
+        if high_conf_flow:
+            await sender.dispatch_flow(high_conf_flow)
     except Exception as e:
         log.error(f"Flow scan error: {e}", exc_info=True)
 
@@ -75,16 +86,29 @@ async def flow_scan_loop():
 # ── Events ────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
+    bot.add_view(WatchlistView(settings))
     log.info(f"✅ Logged in as {bot.user} ({bot.user.id})")
     log.info(f"📡 Watching {len(settings.WATCHLIST)} tickers")
-    scan_loop.start()
-    flow_scan_loop.start()
+    if not scan_loop.is_running():
+        scan_loop.start()
+    if not flow_scan_loop.is_running():
+        flow_scan_loop.start()
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
             name="the market 📈"
         )
     )
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"⚠️ **Missing argument:** `{error.param.name}`\nUsage example: `!{ctx.command.name} SPY`")
+    elif isinstance(error, commands.CommandNotFound):
+        pass
+    else:
+        log.error(f"Command error in '{ctx.command}': {error}")
+
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -120,25 +144,81 @@ async def quick_quote(ctx, ticker: str):
 async def check_flow(ctx, ticker: str):
     """Check unusual options flow for a specific ticker."""
     ticker = ticker.upper()
-    flow = await scanner.get_flow_for_ticker(ticker)
-    if flow:
-        await sender.send_flow_single(ctx.channel, flow)
+    flows = await scanner.get_flow_for_ticker(ticker, is_manual=True)
+    if flows:
+        top_flow = sorted(flows, key=lambda f: f["callout"].confidence, reverse=True)[0]
+        await sender.send_flow_single(ctx.channel, top_flow)
     else:
         await ctx.send(f"No unusual flow detected for **{ticker}**.")
-
-
-@bot.command(name="watchlist")
-async def show_watchlist(ctx):
-    """Show the current watchlist."""
-    tickers = ", ".join(settings.WATCHLIST)
+@bot.command(name="watchlist", aliases=["wl"])
+async def show_watchlist_ui(ctx):
+    """Open the interactive Watchlist UI."""
     embed = discord.Embed(
-        title="📋 Current Watchlist",
-        description=f"```{tickers}```",
-        color=discord.Color.blue()
+        title="📋 Scanner Watchlist Management",
+        description="Click a button below to configure the tickers tracked by the automated scanner.",
+        color=discord.Color.brand_green()
     )
-    embed.set_footer(text=f"Scanning {len(settings.WATCHLIST)} tickers every 10 minutes")
-    await ctx.send(embed=embed)
+    embed.set_footer(text=f"Currently tracking {len(settings.WATCHLIST)} tickers.")
+    await ctx.send(embed=embed, view=WatchlistView(settings))
 
+
+
+
+
+
+@bot.command(name="setup")
+@commands.has_permissions(administrator=True)
+async def interactive_setup(ctx):
+    """Interactive wizard to set up all alerting channels."""
+    prompts = [
+        ("callouts", "Standard Callouts"),
+        ("high_conf", "High Confidence Callouts"),
+        ("flow", "Unusual Flow Alerts")
+    ]
+    
+    await ctx.send("🔧 **Interactive Setup Wizard**\nLet's configure your bot. You can type `skip` at any step to keep the current channel or leave it blank.")
+    
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    for channel_type, display_name in prompts:
+        current_ch_id = server_manager.get_channel(str(ctx.guild.id), channel_type)
+        curr_str = f"(Currently: <#{current_ch_id}>)" if current_ch_id else "(Not set)"
+        
+        await ctx.send(f"\n👉 Please `#mention` the text channel to use for **{display_name}** {curr_str}:")
+        
+        try:
+            msg = await bot.wait_for('message', timeout=60.0, check=check)
+            content_lower = msg.content.lower().strip()
+            
+            if content_lower == 'skip':
+                await ctx.send(f"⏭️ Skipped **{display_name}**.")
+                continue
+                
+            if msg.channel_mentions:
+                target_channel = msg.channel_mentions[0]
+            else:
+                try:
+                    ch_id = int(''.join(filter(str.isdigit, msg.content)))
+                    target_channel = ctx.guild.get_channel(ch_id)
+                except ValueError:
+                    target_channel = None
+                    
+            if target_channel:
+                server_manager.set_channel(str(ctx.guild.id), channel_type, target_channel.id)
+                await ctx.send(f"✅ Bound **{display_name}** to {target_channel.mention}.")
+                try:
+                    await target_channel.send(f"🔗 This channel is now configured to receive **{display_name}**.")
+                except Exception:
+                    pass
+            else:
+                await ctx.send("⚠️ Could not recognize a channel. Skipping this step.")
+                
+        except asyncio.TimeoutError:
+            await ctx.send("⏰ You took too long to answer. Setup wizard timed out. Run `!setup` again when you're ready!")
+            return
+            
+    await ctx.send("\n🎉 **Setup Complete!** The bot is fully configured for this server.")
 
 @bot.command(name="status")
 async def bot_status(ctx):

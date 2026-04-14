@@ -73,7 +73,8 @@ def generate_chart(
         loss     = np.where(delta < 0, -delta, 0.0)
         avg_gain = np.convolve(gain, np.ones(14) / 14, mode='full')[:len(closes)]
         avg_loss = np.convolve(loss, np.ones(14) / 14, mode='full')[:len(closes)]
-        rs       = np.where(avg_loss == 0, 100, avg_gain / avg_loss)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            rs   = np.where(avg_loss == 0, 100, avg_gain / avg_loss)
         rsi      = 100 - (100 / (1 + rs))
 
         # MACD
@@ -141,7 +142,7 @@ def generate_chart(
         plt.setp(ax_price.get_xticklabels(), visible=False)
 
         # Title
-        direction_emoji = "📈 CALL" if option_type == "call" else "📉 PUT"
+        direction_emoji = "CALL" if option_type == "call" else "PUT"
         ax_price.set_title(
             f"  {symbol}  —  {direction_emoji}",
             color=TEXT, fontsize=13, fontweight="bold",
@@ -188,8 +189,14 @@ def generate_chart(
         )
 
         # ── Pattern annotations ───────────────────────────────────────────────
+        import re
+        import warnings
+        
         if signals and signals.patterns:
             pattern_text = " | ".join(signals.patterns[:2])
+            # Strip emojis to prevent Matplotlib missing glyph warnings
+            pattern_text = re.sub(r'[^\x00-\x7F]+', '', pattern_text).strip()
+            
             ax_price.annotate(
                 pattern_text,
                 xy=(0.01, 0.02),
@@ -200,10 +207,15 @@ def generate_chart(
                 alpha=0.9,
             )
 
-        plt.tight_layout(rect=[0, 0, 1, 0.97])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plt.tight_layout(rect=[0, 0, 1, 0.97])
 
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=130, facecolor=BG, bbox_inches="tight")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plt.savefig(buf, format="png", dpi=130, facecolor=BG, bbox_inches="tight")
+            
         plt.close(fig)
         buf.seek(0)
         return buf.read()

@@ -40,10 +40,14 @@ class TechnicalSignals:
     rsi:          float = 50.0
     stoch_k:      float = 50.0   # Stochastic %K (fast)
     stoch_d:      float = 50.0   # Stochastic %D (signal)
+    prev_stoch_k: float = 50.0
+    prev_stoch_d: float = 50.0
     williams_r:   float = -50.0  # Williams %R  (0 to -100)
+    prev_williams_r: float = -50.0
     macd:         float = 0.0
     macd_signal:  float = 0.0
     macd_hist:    float = 0.0
+    prev_macd_hist: float = 0.0
     cmf:          float = 0.0    # Chaikin Money Flow (-1 to +1)
 
     # ── Volatility ─────────────────────────────────────────────────────────
@@ -131,7 +135,10 @@ def _rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
     for i in range(period + 1, len(closes)):
         avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gain[i - 1]) / period
         avg_loss[i] = (avg_loss[i - 1] * (period - 1) + loss[i - 1]) / period
-    rs  = np.where(avg_loss == 0, 100.0, avg_gain / avg_loss)
+    
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rs  = np.where(avg_loss == 0, 100.0, avg_gain / avg_loss)
+    
     rsi = 100 - (100 / (1 + rs))
     rsi[:period] = 50.0
     return rsi
@@ -567,6 +574,9 @@ def compute_signals(bars: List[dict],
 
     # ── Levels ─────────────────────────────────────────────────────────────
     sup, res = _find_support_resistance(highs, lows, closes)
+    sup = min(sup, spot)
+    res = max(res, spot)
+    
     prev_h, prev_l, prev_c = float(highs[-2]), float(lows[-2]), float(closes[-2])
     piv, r1, r2, r3, s1, s2, s3 = _pivot_points(prev_h, prev_l, prev_c)
     cr3, cr4, cs3, cs4          = _camarilla_pivots(prev_h, prev_l, prev_c)
@@ -662,10 +672,14 @@ def compute_signals(bars: List[dict],
         rsi=round(rsi_val, 1),
         stoch_k=round(float(stoch_k_a[-1]), 1),
         stoch_d=round(float(stoch_d_a[-1]), 1),
+        prev_stoch_k=round(float(stoch_k_a[-2]), 1),
+        prev_stoch_d=round(float(stoch_d_a[-2]), 1),
         williams_r=round(float(wr_a[-1]),   1),
+        prev_williams_r=round(float(wr_a[-2]), 1),
         macd=round(float(macd_line[-1]),     4),
         macd_signal=round(float(signal_line[-1]), 4),
         macd_hist=round(float(macd_hist_a[-1]),   4),
+        prev_macd_hist=round(float(macd_hist_a[-2]), 4),
         cmf=round(cmf_val, 3),
         atr=round(atr_val, 2),
         atr_pct=round(atr_val / max(spot, 0.01) * 100, 2),

@@ -4,6 +4,7 @@ Copy .env.example to .env and fill in your values.
 Uses yfinance (free) — no paid API keys required.
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import List
@@ -11,54 +12,78 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+DEFAULT_WATCHLIST = [
+    # Required / priority tickers
+    "SPY", "QQQ", "MU", "HOOD",
+    # Mega-cap tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD",
+    "AVGO", "ORCL", "CRM", "ADBE", "INTC", "QCOM", "TXN", "AMAT",
+    # Financial
+    "JPM", "BAC", "GS", "MS", "WFC", "C", "BLK", "SCHW", "COIN",
+    # ETFs
+    "IWM", "DIA", "XLF", "XLE", "XLK", "XLV", "ARKK", "SQQQ", "TQQQ",
+    "UVXY", "^VIX",
+    # Energy
+    "XOM", "CVX", "OXY", "SLB", "COP",
+    # Healthcare / Biotech
+    "UNH", "JNJ", "PFE", "MRNA", "ABBV", "LLY", "GILD",
+    # Consumer
+    "AMZN", "WMT", "TGT", "HD", "NKE", "SBUX", "MCD", "DIS",
+    # High-momentum / meme
+    "GME", "AMC", "PLTR", "SOFI", "RIVN", "LCID", "SNAP", "UBER",
+    "LYFT", "RBLX", "DKNG", "PENN",
+    # Industrial / macro
+    "BA", "CAT", "DE", "LMT", "RTX", "GE", "MMM",
+    # Semis / AI plays
+    "SMCI", "ARM", "MRVL", "LRCX", "KLAC", "NXPI", "ON",
+    # Rates / bonds
+    "TLT", "HYG", "LQD",
+    # Commodities proxies
+    "GLD", "SLV", "USO", "UNG",
+    # Other high-volume names
+    "NFLX", "SPOT", "PYPL", "XYZ", "ROKU", "ZM", "SNOW", "DDOG",
+    "CRWD", "PANW", "OKTA", "MDB", "NET", "SHOP", "TTD",
+]
+
+def load_watchlist() -> List[str]:
+    filepath = os.path.join(os.path.dirname(__file__), "watchlist.json")
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    
+    save_watchlist(DEFAULT_WATCHLIST)
+    return list(DEFAULT_WATCHLIST)
+
+def save_watchlist(tickers: List[str]):
+    filepath = os.path.join(os.path.dirname(__file__), "watchlist.json")
+    try:
+        with open(filepath, "w") as f:
+            json.dump(tickers, f, indent=4)
+    except Exception as e:
+        print(f"Error saving watchlist: {e}")
+
+
 
 @dataclass
 class Settings:
     # ── Discord ───────────────────────────────────────────────────────────────
     DISCORD_TOKEN: str = field(default_factory=lambda: os.getenv("DISCORD_TOKEN", ""))
 
-    # Channel IDs — paste yours here after right-clicking each channel
-    CHANNEL_CALLOUTS: int   = field(default_factory=lambda: int(os.getenv("CHANNEL_CALLOUTS", "0")))
-    CHANNEL_HIGH_CONF: int  = field(default_factory=lambda: int(os.getenv("CHANNEL_HIGH_CONF", "0")))
-    CHANNEL_FLOW: int       = field(default_factory=lambda: int(os.getenv("CHANNEL_FLOW", "0")))
+    # Channels are now managed via !setchannel dynamically across multiple servers
+    # (Removed hardcoded CHANNEL_CALLOUTS, CHANNEL_HIGH_CONF, CHANNEL_FLOW)
+
+    # Discord Webhook configuration (optional)
+    WEBHOOK_URL: str        = field(default_factory=lambda: os.getenv("WEBHOOK_URL", "https://discord.com/api/webhooks/1486088074000859237/r9xU0ScY_pzUlfTNzUTWvtT0HpCjJEC2TdnHW9XtXNVKh0clw7B8oMWOmM14BW5_oSqq"))
 
     # ── Greeks / Risk-Free Rate ───────────────────────────────────────────────
     # Used for Black-Scholes Greeks computation (~current 10Y Treasury yield)
     RISK_FREE_RATE: float = field(default_factory=lambda: float(os.getenv("RISK_FREE_RATE", "0.045")))
 
     # ── Watchlist — Top 100 by volume + required tickers ─────────────────────
-    WATCHLIST: List[str] = field(default_factory=lambda: [
-        # Required / priority tickers
-        "SPY", "QQQ", "MU", "HOOD",
-        # Mega-cap tech
-        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD",
-        "AVGO", "ORCL", "CRM", "ADBE", "INTC", "QCOM", "TXN", "AMAT",
-        # Financial
-        "JPM", "BAC", "GS", "MS", "WFC", "C", "BLK", "SCHW", "COIN",
-        # ETFs
-        "IWM", "DIA", "XLF", "XLE", "XLK", "XLV", "ARKK", "SQQQ", "TQQQ",
-        "UVXY", "VIX",
-        # Energy
-        "XOM", "CVX", "OXY", "SLB", "COP",
-        # Healthcare / Biotech
-        "UNH", "JNJ", "PFE", "MRNA", "ABBV", "LLY", "GILD",
-        # Consumer
-        "AMZN", "WMT", "TGT", "HD", "NKE", "SBUX", "MCD", "DIS",
-        # High-momentum / meme
-        "GME", "AMC", "PLTR", "SOFI", "RIVN", "LCID", "SNAP", "UBER",
-        "LYFT", "RBLX", "DKNG", "PENN", "CLOV", "BBBY",
-        # Industrial / macro
-        "BA", "CAT", "DE", "LMT", "RTX", "GE", "MMM",
-        # Semis / AI plays
-        "SMCI", "ARM", "MRVL", "LRCX", "KLAC", "NXPI", "ON",
-        # Rates / bonds
-        "TLT", "HYG", "LQD",
-        # Commodities proxies
-        "GLD", "SLV", "USO", "UNG",
-        # Other high-volume names
-        "NFLX", "SPOT", "PYPL", "SQ", "ROKU", "ZM", "SNOW", "DDOG",
-        "CRWD", "PANW", "OKTA", "MDB", "NET", "SHOP", "TTD",
-    ])
+    WATCHLIST: List[str] = field(default_factory=load_watchlist)
 
     # ── Scanner Thresholds ────────────────────────────────────────────────────
     # Options liquidity filters
@@ -114,4 +139,7 @@ class Settings:
     FLOW_TRACKER_WINDOW_MINUTES: int = 120    # rolling window for pattern detection
     BLOCK_TRADE_MIN_CONTRACTS: int   = 1000   # min volume to classify as block trade
     LOTTERY_MAX_MID_PRICE: float     = 0.30   # max mid price for "lottery ticket"
+    
+    # Execution Protocol
+    MAX_CONFLUENCE_ONLY: bool        = True   # Strict 100% technical/flow/insider alignment
 

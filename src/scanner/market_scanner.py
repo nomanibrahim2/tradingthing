@@ -50,7 +50,7 @@ class MarketScanner:
                     callouts.extend(res)
                 elif isinstance(res, Exception):
                     log.warning(f"Ticker error: {res}")
-            await asyncio.sleep(2.0)  # rate limit buffer
+            await asyncio.sleep(4.0)  # rate limit buffer between batches
 
         callouts.sort(key=lambda x: x["callout"].confidence, reverse=True)
         log.info(f"Scan complete — {len(callouts)} callout(s).")
@@ -135,7 +135,7 @@ class MarketScanner:
             for res in results:
                 if isinstance(res, list):
                     flow_alerts.extend(res)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(4.0)
 
         flow_alerts.sort(
             key=lambda x: x["callout"].volume * x["callout"].mid * 100,
@@ -163,7 +163,7 @@ class MarketScanner:
 
         return top_alerts
 
-    async def _flow_for_ticker(self, symbol: str, quote: Optional[dict]) -> List[dict]:
+    async def _flow_for_ticker(self, symbol: str, quote: Optional[dict], is_manual: bool = False) -> List[dict]:
         if not quote:
             return []
         price = float(quote.get("last") or quote.get("close") or 0)
@@ -185,10 +185,28 @@ class MarketScanner:
 
         avg_vol  = await self.yf_client.get_avg_daily_volume(symbol)
         callouts = self.analyzer.analyze_unusual_flow(symbol, price, options, avg_vol,
-                                                      signals=signals)
+                                                      signals=signals, is_manual=is_manual)
+
+        filtered_callouts = []
+        for c in callouts:
+            if getattr(self.s, "MAX_CONFLUENCE_ONLY", False) and not is_manual:
+                if "PENDING_INSIDER_CHECK" not in getattr(c, "intelligence_flags", []):
+                    continue
+                
+                direction = "BULLISH" if c.option_type == "call" else "BEARISH"
+                insider_bias = await self.yf_client.get_insider_bias(symbol)
+                if insider_bias != direction:
+                    continue
+                
+                c.confidence_tier = "MAX CONFLUENCE"
+                if "PENDING_INSIDER_CHECK" in c.intelligence_flags:
+                    c.intelligence_flags.remove("PENDING_INSIDER_CHECK")
+                c.intelligence_flags.append(f"INSIDER {insider_bias} ✅")
+            
+            filtered_callouts.append(c)
 
         return [{"callout": c, "quote": quote, "chart_bytes": None, "signals": signals}
-                for c in callouts]
+                for c in filtered_callouts]
 
     # ── Single ticker ─────────────────────────────────────────────────────
     async def analyze_single(self, symbol: str) -> Optional[dict]:
@@ -198,12 +216,12 @@ class MarketScanner:
         results = await self._analyze_ticker(symbol, quote, is_manual=True)
         return results[0] if results else None
 
-    async def get_flow_for_ticker(self, symbol: str) -> Optional[dict]:
+    async def get_flow_for_ticker(self, symbol: str, is_manual: bool = False) -> List[dict]:
         quote = await self.yf_client.get_quote(symbol)
         if not quote:
-            return None
-        results = await self._flow_for_ticker(symbol, quote)
-        return results[0] if results else None
+            return []
+        
+        return await self._flow_for_ticker(symbol, quote, is_manual=is_manual)
 
     # ── Dedup ─────────────────────────────────────────────────────────────
     def _is_recently_sent(self, symbol: str, cooldown_hours: int = 2) -> bool:
