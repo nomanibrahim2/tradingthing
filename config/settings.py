@@ -141,5 +141,5 @@ class Settings:
     LOTTERY_MAX_MID_PRICE: float     = 0.30   # max mid price for "lottery ticket"
     
     # Execution Protocol
-    MAX_CONFLUENCE_ONLY: bool        = True   # Strict 100% technical/flow/insider alignment
+    MAX_CONFLUENCE_ONLY: bool        = False  # Disabled — was filtering out all callouts
 

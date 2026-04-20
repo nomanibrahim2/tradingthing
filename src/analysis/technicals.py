@@ -653,8 +653,8 @@ def compute_signals(bars: List[dict],
 
     score = round(max(-1.0, min(1.0, score)), 3)
 
-    if   score >  0.20:  bias = "BULLISH"
-    elif score < -0.20:  bias = "BEARISH"
+    if   score >  0.10:  bias = "BULLISH"
+    elif score < -0.10:  bias = "BEARISH"
     else:                bias = "NEUTRAL"
 
     if   adx_val > 30:  trend_str = "STRONG"

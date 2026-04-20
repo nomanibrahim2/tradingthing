@@ -40,7 +40,7 @@ class MarketScanner:
         quote_map  = {q.get("symbol", ""): q for q in quotes_raw}
 
         callouts   = []
-        batch_size = 5  # smaller batches to respect yfinance rate limits
+        batch_size = 3  # small batches to respect yfinance rate limits
         for i in range(0, len(tickers), batch_size):
             batch   = tickers[i : i + batch_size]
             tasks   = [self._analyze_ticker(sym, quote_map.get(sym)) for sym in batch]
@@ -50,7 +50,7 @@ class MarketScanner:
                     callouts.extend(res)
                 elif isinstance(res, Exception):
                     log.warning(f"Ticker error: {res}")
-            await asyncio.sleep(4.0)  # rate limit buffer between batches
+            await asyncio.sleep(6.0)  # longer buffer between batches to avoid rate limits
 
         callouts.sort(key=lambda x: x["callout"].confidence, reverse=True)
         log.info(f"Scan complete — {len(callouts)} callout(s).")
@@ -127,7 +127,7 @@ class MarketScanner:
         quote_map  = {q.get("symbol", ""): q for q in quotes_raw}
 
         flow_alerts = []
-        batch_size  = 4  # smaller batches for rate limiting
+        batch_size  = 3  # small batches for rate limiting
         for i in range(0, len(tickers), batch_size):
             batch   = tickers[i : i + batch_size]
             tasks   = [self._flow_for_ticker(sym, quote_map.get(sym)) for sym in batch]
@@ -135,7 +135,7 @@ class MarketScanner:
             for res in results:
                 if isinstance(res, list):
                     flow_alerts.extend(res)
-            await asyncio.sleep(4.0)
+            await asyncio.sleep(6.0)
 
         flow_alerts.sort(
             key=lambda x: x["callout"].volume * x["callout"].mid * 100,

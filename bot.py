@@ -54,13 +54,17 @@ async def scan_loop():
     log.info("🔍 Starting market scan...")
     try:
         callouts = await scanner.run_full_scan()
-        high_conf = [c for c in callouts if c["callout"].confidence >= 0.80]
+        qualified = [c for c in callouts if c["callout"].confidence >= 0.70]
         
-        if high_conf:
-            await sender.dispatch(high_conf)
-            log.info(f"✅ Dispatched {len(high_conf)} callout(s) (confidence >= 80%).")
+        if qualified:
+            await sender.dispatch(qualified)
+            log.info(f"✅ Dispatched {len(qualified)} callout(s) (confidence >= 70%).")
         else:
-            log.info("No qualifying high-confidence callouts this scan.")
+            if callouts:
+                top = callouts[0]["callout"]
+                log.info(f"Found {len(callouts)} callout(s) but none >= 70% confidence. Top: {top.symbol} {top.confidence:.0%}")
+            else:
+                log.info("No callouts found this scan.")
     except Exception as e:
         log.error(f"Scan error: {e}", exc_info=True)
 
@@ -72,33 +76,84 @@ async def flow_scan_loop():
         return
     try:
         flow_alerts = await scanner.scan_unusual_flow()
-        high_conf_flow = [
+        qualified_flow = [
             f for f in flow_alerts 
-            if getattr(f["callout"], "confidence", getattr(f["callout"], "conviction_score", 0.0)) >= 0.80
+            if getattr(f["callout"], "conviction_score", getattr(f["callout"], "confidence", 0.0)) >= 0.70
         ]
         
-        if high_conf_flow:
-            await sender.dispatch_flow(high_conf_flow)
+        if qualified_flow:
+            await sender.dispatch_flow(qualified_flow)
+            log.info(f"✅ Dispatched {len(qualified_flow)} flow alert(s).")
+        else:
+            if flow_alerts:
+                top = flow_alerts[0]["callout"]
+                log.info(f"Found {len(flow_alerts)} flow alert(s) but none >= 70% conviction. Top: {top.symbol} {top.conviction_score:.0%}")
     except Exception as e:
         log.error(f"Flow scan error: {e}", exc_info=True)
 
 
+# ── Startup Scan ──────────────────────────────────────────────────────────────
+async def startup_scan():
+    """Run an immediate full scan + flow scan on boot — no market hours gate."""
+    log.info("🚀 Startup scan — sending today's callouts...")
+
+    # ── Directional scan ──────────────────────────────────────────────────
+    try:
+        callouts = await scanner.run_full_scan()
+        if callouts:
+            await sender.dispatch(callouts)
+            log.info(f"✅ Startup: dispatched {len(callouts)} directional callout(s).")
+        else:
+            log.info("Startup: no directional callouts found.")
+    except Exception as e:
+        log.error(f"Startup directional scan error: {e}", exc_info=True)
+
+    # ── Flow scan ─────────────────────────────────────────────────────────
+    try:
+        flow_alerts = await scanner.scan_unusual_flow()
+        qualified_flow = [
+            f for f in flow_alerts
+            if getattr(f["callout"], "conviction_score",
+                       getattr(f["callout"], "confidence", 0.0)) >= 0.70
+        ]
+        if qualified_flow:
+            await sender.dispatch_flow(qualified_flow)
+            log.info(f"✅ Startup: dispatched {len(qualified_flow)} flow alert(s).")
+        else:
+            log.info("Startup: no qualifying flow alerts.")
+    except Exception as e:
+        log.error(f"Startup flow scan error: {e}", exc_info=True)
+
+    log.info("🏁 Startup scan complete — live loops now active.")
+
+
 # ── Events ────────────────────────────────────────────────────────────────────
+_startup_done = False
+
 @bot.event
 async def on_ready():
+    global _startup_done
     bot.add_view(WatchlistView(settings))
     log.info(f"✅ Logged in as {bot.user} ({bot.user.id})")
     log.info(f"📡 Watching {len(settings.WATCHLIST)} tickers")
-    if not scan_loop.is_running():
-        scan_loop.start()
-    if not flow_scan_loop.is_running():
-        flow_scan_loop.start()
+
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
             name="the market 📈"
         )
     )
+
+    if not _startup_done:
+        _startup_done = True
+        # Run startup scan FIRST, then start recurring loops after it finishes
+        await startup_scan()
+
+    # Start the recurring live loops (they wait one full interval before first tick)
+    if not scan_loop.is_running():
+        scan_loop.start()
+    if not flow_scan_loop.is_running():
+        flow_scan_loop.start()
 
 @bot.event
 async def on_command_error(ctx, error):

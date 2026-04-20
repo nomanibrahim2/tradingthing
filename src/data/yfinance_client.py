@@ -22,7 +22,7 @@ log = logging.getLogger("YFinanceClient")
 _executor = ThreadPoolExecutor(max_workers=4)
 
 # Global rate-limit: minimum seconds between yfinance HTTP calls
-_THROTTLE_DELAY = 0.35  # ~3 requests/sec to stay well under Yahoo's limit
+_THROTTLE_DELAY = 0.60  # ~1.5 requests/sec to stay well under Yahoo's limit
 
 
 class YFinanceClient:
@@ -126,7 +126,7 @@ class YFinanceClient:
 
     def _fetch_historical(self, symbol: str, days_back: int) -> List[Dict]:
         """Blocking: fetch historical daily bars with retry on rate limit."""
-        max_retries = 3
+        max_retries = 5
         for attempt in range(max_retries):
             try:
                 ticker = yf.Ticker(symbol)
@@ -153,8 +153,8 @@ class YFinanceClient:
                 return bars
             except Exception as e:
                 err_str = str(e).lower()
-                if "too many requests" in err_str or "rate limit" in err_str:
-                    wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                if "too many requests" in err_str or "rate limit" in err_str or "429" in err_str:
+                    wait = 4 * (2 ** attempt)  # 4s, 8s, 16s, 32s, 64s
                     log.warning(f"Rate limited on {symbol}, retrying in {wait}s (attempt {attempt+1}/{max_retries})")
                     time.sleep(wait)
                 else:
