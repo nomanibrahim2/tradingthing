@@ -100,11 +100,12 @@ async def startup_scan():
     # ── Directional scan ──────────────────────────────────────────────────
     try:
         callouts = await scanner.run_full_scan()
-        if callouts:
-            await sender.dispatch(callouts)
-            log.info(f"✅ Startup: dispatched {len(callouts)} directional callout(s).")
+        qualified = [c for c in callouts if c["callout"].confidence >= 0.70]
+        if qualified:
+            await sender.dispatch(qualified)
+            log.info(f"✅ Startup: dispatched {len(qualified)} directional callout(s) (>= 70%).")
         else:
-            log.info("Startup: no directional callouts found.")
+            log.info(f"Startup: {len(callouts)} callout(s) found but none >= 70% confidence.")
     except Exception as e:
         log.error(f"Startup directional scan error: {e}", exc_info=True)
 
@@ -173,11 +174,12 @@ async def force_scan(ctx):
     """Force an immediate scan."""
     await ctx.send("🔍 Running manual scan...")
     callouts = await scanner.run_full_scan()
-    if callouts:
-        await sender.dispatch(callouts)
-        await ctx.send(f"✅ Found and dispatched **{len(callouts)}** callout(s).")
+    qualified = [c for c in callouts if c["callout"].confidence >= 0.70]
+    if qualified:
+        await sender.dispatch(qualified)
+        await ctx.send(f"✅ Found and dispatched **{len(qualified)}** callout(s) (>= 70% confidence).")
     else:
-        await ctx.send("No qualifying setups found right now.")
+        await ctx.send(f"No callouts at 70%+ confidence ({len(callouts)} found below threshold).")
 
 
 @bot.command(name="quote")
