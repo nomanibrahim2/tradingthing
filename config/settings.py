@@ -92,8 +92,8 @@ class Settings:
     MIN_OPTION_VOLUME: int      = 100         # minimum daily option volume
 
     # Confidence tiers (0.0 – 1.0)
-    HIGH_CONF_THRESHOLD: float  = 0.75        # → #high-confidence-only + #trade-callouts
-    MED_CONF_THRESHOLD: float   = 0.55        # → #trade-callouts only
+    HIGH_CONF_THRESHOLD: float  = 0.85        # → #high-confidence-only + #trade-callouts
+    MED_CONF_THRESHOLD: float   = 0.70        # → #trade-callouts only (minimum 70%)
     # Below MED_CONF → not posted
 
     # Unusual flow detection
