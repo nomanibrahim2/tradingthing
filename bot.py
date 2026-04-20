@@ -54,7 +54,7 @@ async def scan_loop():
     log.info("🔍 Starting market scan...")
     try:
         callouts = await scanner.run_full_scan()
-        qualified = [c for c in callouts if c["callout"].confidence >= 0.70]
+        qualified = [c for c in callouts if c["callout"].confidence >= 0.70 and c["callout"].mid <= 5.00]
         
         if qualified:
             await sender.dispatch(qualified)
@@ -79,6 +79,7 @@ async def flow_scan_loop():
         qualified_flow = [
             f for f in flow_alerts 
             if getattr(f["callout"], "conviction_score", getattr(f["callout"], "confidence", 0.0)) >= 0.70
+            and f["callout"].mid <= 5.00
         ]
         
         if qualified_flow:
@@ -100,7 +101,7 @@ async def startup_scan():
     # ── Directional scan ──────────────────────────────────────────────────
     try:
         callouts = await scanner.run_full_scan()
-        qualified = [c for c in callouts if c["callout"].confidence >= 0.70]
+        qualified = [c for c in callouts if c["callout"].confidence >= 0.70 and c["callout"].mid <= 5.00]
         if qualified:
             await sender.dispatch(qualified)
             log.info(f"✅ Startup: dispatched {len(qualified)} directional callout(s) (>= 70%).")
@@ -116,6 +117,7 @@ async def startup_scan():
             f for f in flow_alerts
             if getattr(f["callout"], "conviction_score",
                        getattr(f["callout"], "confidence", 0.0)) >= 0.70
+            and f["callout"].mid <= 5.00
         ]
         if qualified_flow:
             await sender.dispatch_flow(qualified_flow)
